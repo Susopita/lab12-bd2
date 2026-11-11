@@ -1,0 +1,442 @@
+-- P2: FRAGMENTACIÓN POR RANGO
+
+SET max_parallel_workers_per_gather = 0;
+SET jit = off;
+SET enable_partition_pruning = on;
+
+-- P2.3: Distribución de contrataciones por año
+
+SELECT
+    EXTRACT(YEAR FROM hire_date)::INT AS anio,
+    COUNT(*) AS total_empleados
+FROM employees
+GROUP BY EXTRACT(YEAR FROM hire_date)
+ORDER BY anio;
+
+-- P2.3: Rango temporal del dataset
+
+SELECT
+    MIN(hire_date) AS primera_contratacion,
+    MAX(hire_date) AS ultima_contratacion,
+    COUNT(*) AS total_empleados,
+    COUNT(*) FILTER (WHERE hire_date IS NULL) AS fechas_nulas
+FROM employees;
+
+-- P2.3: PARTICIONAMIENTO POR EXPRESION
+
+CREATE TABLE employees2 (
+    LIKE employees
+)
+PARTITION BY RANGE (
+    date_part('year', hire_date)
+);
+
+-- Particion 1: 1985-1987
+CREATE TABLE employees2_p1
+PARTITION OF employees2
+FOR VALUES FROM (1985) TO (1988);
+
+-- Particion 2: 1988-1991
+CREATE TABLE employees2_p2
+PARTITION OF employees2
+FOR VALUES FROM (1988) TO (1992);
+
+-- Particion 3: 1992-2000
+CREATE TABLE employees2_p3
+PARTITION OF employees2
+FOR VALUES FROM (1992) TO (2001);
+
+-- P2.3: PARTICIONAMIENTO POR COLUMNA
+CREATE TABLE employees2b (
+    LIKE employees
+)
+PARTITION BY RANGE (hire_date);
+
+-- Particion 1: 1985-1987
+CREATE TABLE employees2b_p1
+PARTITION OF employees2b
+FOR VALUES FROM ('1985-01-01')
+TO ('1988-01-01');
+
+-- Particion 2: 1988-1991
+CREATE TABLE employees2b_p2
+PARTITION OF employees2b
+FOR VALUES FROM ('1988-01-01')
+TO ('1992-01-01');
+
+-- Particion 3: 1992-2000
+CREATE TABLE employees2b_p3
+PARTITION OF employees2b
+FOR VALUES FROM ('1992-01-01')
+TO ('2001-01-01');
+
+-- Cargar los datos en employees2
+INSERT INTO employees2
+SELECT * FROM employees;
+
+-- Cargar los datos en employees2b
+INSERT INTO employees2b
+SELECT * FROM employees;
+
+VACUUM ANALYZE employees2;
+VACUUM ANALYZE employees2b;
+
+-- Verificar distribucion por particiones
+SELECT
+    'employees2' AS tabla,
+    tableoid::regclass AS particion,
+    COUNT(*) AS empleados
+FROM employees2
+GROUP BY tableoid
+
+UNION ALL
+
+SELECT
+    'employees2b' AS tabla,
+    tableoid::regclass AS particion,
+    COUNT(*) AS empleados
+FROM employees2b
+GROUP BY tableoid
+
+ORDER BY tabla, particion;
+
+-- P2.4 - EXPERIMENTO A
+-- Q1: Tabla sin fragmentacion
+-- Año evaluado: 1989
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT *
+FROM employees
+WHERE date_part('year', hire_date) = 1989;
+
+-- P2.4 - EXPERIMENTO A
+-- Q1: Fragmentacion por expresion
+
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT *
+FROM employees2
+WHERE date_part('year', hire_date) = 1989;
+
+-- P2.4 - EXPERIMENTO A
+-- Q1: Fragmentacion por fecha completa
+
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT *
+FROM employees2b
+WHERE date_part('year', hire_date) = 1989;
+
+-- P2.4 - EXPERIMENTO A
+-- Q2: Tabla sin fragmentacion
+-- Año evaluado: 1989
+
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT *
+FROM employees
+WHERE hire_date BETWEEN
+      '1989-01-01' AND '1989-12-31';
+
+-- P2.4 - EXPERIMENTO A
+-- Q2: EMPLOYEES2
+-- Fragmentacion por expresion
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT *
+FROM employees2
+WHERE hire_date BETWEEN
+      '1989-01-01' AND '1989-12-31';
+
+-- P2.4 - EXPERIMENTO A
+-- Q2: EMPLOYEES2B
+-- Fragmentacion por fecha completa
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT *
+FROM employees2b
+WHERE hire_date BETWEEN
+      '1989-01-01' AND '1989-12-31';
+
+-- P2.4 - EXPERIMENTO A
+-- Q3: EMPLOYEES SIN FRAGMENTACION
+-- Año evaluado: 1989
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT *
+FROM employees
+WHERE EXTRACT(YEAR FROM hire_date) = 1989;
+
+-- P2.4 - EXPERIMENTO A
+-- Q3: EMPLOYEES2
+-- Fragmentacion por expresion
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT *
+FROM employees2
+WHERE EXTRACT(YEAR FROM hire_date) = 1989;
+
+-- P2.4 - EXPERIMENTO A
+-- Q3: EMPLOYEES2B
+-- Fragmentacion por fecha completa
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT *
+FROM employees2b
+WHERE EXTRACT(YEAR FROM hire_date) = 1989;
+
+-- P2.4 - EXPERIMENTO B
+-- RANGO: UN MES
+-- SIN FRAGMENTACION Y SIN INDICE
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT *
+FROM employees
+WHERE hire_date >= DATE '1989-01-01'
+  AND hire_date < DATE '1989-02-01';
+
+-- P2.4 - EXPERIMENTO B
+-- RANGO: UN MES
+-- CON FRAGMENTACION Y SIN INDICE
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT *
+FROM employees2b
+WHERE hire_date >= DATE '1989-01-01'
+  AND hire_date < DATE '1989-02-01';
+
+-- P2.4 - EXPERIMENTO B
+-- RANGO: UN AÑO COMPLETO
+-- SIN FRAGMENTACION Y SIN INDICE
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT *
+FROM employees
+WHERE hire_date >= DATE '1989-01-01'
+  AND hire_date < DATE '1990-01-01';
+
+-- P2.4 - EXPERIMENTO B
+-- RANGO: UN AÑO COMPLETO
+-- CON FRAGMENTACION Y SIN INDICE
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT *
+FROM employees2b
+WHERE hire_date >= DATE '1989-01-01'
+  AND hire_date < DATE '1990-01-01';
+
+-- P2.4 - EXPERIMENTO B
+-- RANGO: CINCO AÑOS (1989-1993)
+-- SIN FRAGMENTACION Y SIN INDICE
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT *
+FROM employees
+WHERE hire_date >= DATE '1989-01-01'
+  AND hire_date < DATE '1994-01-01';  
+
+-- P2.4 - EXPERIMENTO B
+-- RANGO: CINCO AÑOS (1989-1993)
+-- CON FRAGMENTACION Y SIN INDICE
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT *
+FROM employees2b
+WHERE hire_date >= DATE '1989-01-01'
+  AND hire_date < DATE '1994-01-01';
+
+-- P2.4 - EXPERIMENTO B
+-- RANGO: TODO EL PERIODO
+-- SIN FRAGMENTACION Y SIN INDICE
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT *
+FROM employees
+WHERE hire_date >= DATE '1985-01-01'
+  AND hire_date < DATE '2001-01-01';
+
+-- P2.4 - EXPERIMENTO B
+-- RANGO: TODO EL PERIODO
+-- CON FRAGMENTACION Y SIN INDICE
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT *
+FROM employees2b
+WHERE hire_date >= DATE '1985-01-01'
+  AND hire_date < DATE '2001-01-01';
+
+-- P2.4 - EXPERIMENTO B
+-- CREACION DE INDICES B-TREE
+CREATE INDEX idx_employees_hire_date
+ON employees USING BTREE (hire_date);
+
+CREATE INDEX idx_employees2b_hire_date
+ON employees2b USING BTREE (hire_date);
+
+ANALYZE employees;
+ANALYZE employees2b;
+
+-- Verificar los indices creados
+SELECT
+    tablename,
+    indexname,
+    indexdef
+FROM pg_indexes
+WHERE schemaname = 'public'
+  AND (
+      tablename = 'employees'
+      OR tablename LIKE 'employees2b%'
+  )
+ORDER BY tablename, indexname;
+
+-- P2.4 - EXPERIMENTO B
+-- RANGO: UN MES
+-- SIN FRAGMENTACION, CON INDICE
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT *
+FROM employees
+WHERE hire_date >= DATE '1989-01-01'
+  AND hire_date < DATE '1989-02-01';
+
+-- P2.4 - EXPERIMENTO B
+-- RANGO: UN MES
+-- CON FRAGMENTACION Y CON INDICE
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT *
+FROM employees2b
+WHERE hire_date >= DATE '1989-01-01'
+  AND hire_date < DATE '1989-02-01';
+
+-- P2.4 - EXPERIMENTO B
+-- RANGO: UN AÑO
+-- SIN FRAGMENTACION, CON INDICE
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT *
+FROM employees
+WHERE hire_date >= DATE '1989-01-01'
+  AND hire_date < DATE '1990-01-01';
+
+-- P2.4 - EXPERIMENTO B
+-- RANGO: UN AÑO
+-- CON FRAGMENTACION Y CON INDICE
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT *
+FROM employees2b
+WHERE hire_date >= DATE '1989-01-01'
+  AND hire_date < DATE '1990-01-01';
+
+-- P2.4 - EXPERIMENTO B
+-- RANGO: CINCO AÑOS
+-- SIN FRAGMENTACION, CON INDICE
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT *
+FROM employees
+WHERE hire_date >= DATE '1989-01-01'
+  AND hire_date < DATE '1994-01-01';
+
+-- P2.4 - EXPERIMENTO B
+-- RANGO: CINCO AÑOS
+-- CON FRAGMENTACION Y CON INDICE
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT *
+FROM employees2b
+WHERE hire_date >= DATE '1989-01-01'
+  AND hire_date < DATE '1994-01-01';
+
+-- P2.4 - EXPERIMENTO B
+-- RANGO: TODO EL PERIODO
+-- SIN FRAGMENTACION, CON INDICE
+
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT *
+FROM employees
+WHERE hire_date >= DATE '1985-01-01'
+  AND hire_date < DATE '2001-01-01';
+
+-- P2.4 - EXPERIMENTO B
+-- RANGO: TODO EL PERIODO
+-- CON FRAGMENTACION Y CON INDICE
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT *
+FROM employees2b
+WHERE hire_date >= DATE '1985-01-01'
+  AND hire_date < DATE '2001-01-01';
+
+-- P2.4 - EXPERIMENTO C
+-- PARTICIONAMIENTO MENSUAL
+CREATE TABLE employees2c (
+    LIKE employees
+)
+PARTITION BY RANGE (hire_date);
+
+-- Crear una particion por mes
+
+DO $$
+DECLARE
+    fecha_inicio DATE := DATE '1985-01-01';
+    fecha_final DATE := DATE '2000-02-01';
+    fecha_actual DATE;
+    fecha_siguiente DATE;
+    nombre_particion TEXT;
+BEGIN
+    fecha_actual := fecha_inicio;
+
+    WHILE fecha_actual < fecha_final LOOP
+
+        fecha_siguiente :=
+            (fecha_actual + INTERVAL '1 month')::DATE;
+
+        nombre_particion :=
+            'employees2c_' ||
+            TO_CHAR(fecha_actual, 'YYYY_MM');
+
+        EXECUTE format(
+            'CREATE TABLE %I PARTITION OF employees2c
+             FOR VALUES FROM (%L) TO (%L)',
+            nombre_particion,
+            fecha_actual,
+            fecha_siguiente
+        );
+
+        fecha_actual := fecha_siguiente;
+
+    END LOOP;
+END $$;
+
+
+INSERT INTO employees2c
+SELECT * FROM employees;
+
+VACUUM ANALYZE employees2c;
+
+-- P2.4 - EXPERIMENTO C
+-- Verificar particiones
+SELECT
+    COUNT(*) AS total_particiones
+FROM pg_inherits
+WHERE inhparent = 'employees2c'::regclass;
+
+-- P2.4 - EXPERIMENTO C
+-- CONDICIONES CONTROLADAS
+SET max_parallel_workers_per_gather = 0;
+SET jit = off;
+SET enable_partition_pruning = on;
+
+-- Evitar accesos mediante indices
+SET enable_indexscan = off;
+SET enable_indexonlyscan = off;
+SET enable_bitmapscan = off;
+
+-- EXPERIMENTO C
+-- 3 PARTICIONES
+-- CONSULTA DE UN MES
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT *
+FROM employees2b
+WHERE hire_date >= DATE '1989-01-01'
+  AND hire_date < DATE '1989-02-01';
+
+-- EXPERIMENTO C
+-- 181 PARTICIONES
+-- CONSULTA DE UN MES
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT *
+FROM employees2c
+WHERE hire_date >= DATE '1989-01-01'
+  AND hire_date < DATE '1989-02-01';
+
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT *
+FROM employees2b
+WHERE last_name = 'Facello';
+
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT *
+FROM employees2c
+WHERE last_name = 'Facello';
+SELECT *
+FROM employees2b  -- o employees2c
+WHERE last_name = 'Facello';
